@@ -3,8 +3,10 @@ package myconext.security;
 import myconext.config.BeanConfig;
 import myconext.crypto.KeyGenerator;
 import myconext.log.MDCFilter;
+import myconext.mail.MailBox;
 import myconext.manage.ServiceProviderResolver;
 import myconext.model.ServiceProvider;
+import myconext.repository.AuthenticationRequestRepository;
 import myconext.repository.UserRepository;
 import myconext.shibboleth.ShibbolethPreAuthenticatedProcessingFilter;
 import myconext.shibboleth.ShibbolethUserDetailService;
@@ -55,24 +57,52 @@ public class SecurityConfiguration {
 
     @Configuration
     @Order(1)
-    public static class SamlSecurity extends SamlIdentityProviderSecurityConfiguration {
+    public static class SamlIdpSecurity extends WebSecurityConfigurerAdapter{
         private Resource privateKeyPath;
         private Resource certificatePath;
         private List<ServiceProvider> serviceProviders = new ArrayList<>();
         private String idpEntityId;
-        private BeanConfig beanConfig;
+        private final String redirectUrl;
+        private final AuthenticationRequestRepository authenticationRequestRepository;
+        private final UserRepository userRepository;
+        private final int rememberMeMaxAge;
+        private final boolean secureCookie;
+        private final String magicLinkUrl;
+        private final MailBox mailBox;
+        private final ServiceProviderResolver serviceProviderResolver;
 
-        public SamlSecurity(BeanConfig beanConfig,
-                            @Value("${private_key_path}") Resource privateKeyPath,
+
+        public SamlIdpSecurity(@Value("${private_key_path}") Resource privateKeyPath,
                             @Value("${certificate_path}") Resource certificatePath,
                             @Value("${idp_entity_id}") String idpEntityId,
                             @Value("${sp_entity_id}") String spEntityId,
-                            @Value("${sp_entity_metadata_url}") String spMetaDataUrl) {
-            super("/saml/guest-idp/", beanConfig);
-            this.beanConfig = beanConfig;
+                            @Value("${sp_entity_metadata_url}") String spMetaDataUrl,
+                            @Value("${saml_metadata_base_path}") String samlMetadataBasePath,
+                            @Value("${idp_redirect_url}") String redirectUrl,
+                            @Value("${remember_me_max_age_seconds}") int rememberMeMaxAge,
+                            @Value("${secure_cookie}") boolean secureCookie,
+                            @Value("${email.magic-link-url}") String magicLinkUrl,
+                            @Value("${account_linking_context_class_ref.linked_institution}") String linkedInstitution,
+                            @Value("${account_linking_context_class_ref.validate_names}") String validateNames,
+                            @Value("${account_linking_context_class_ref.affiliation_student}") String affiliationStudent,
+                            AuthenticationRequestRepository authenticationRequestRepository,
+                            UserRepository userRepository,
+                            MailBox mailBox,
+                            ServiceProviderResolver serviceProviderResolver) {
+
             this.privateKeyPath = privateKeyPath;
             this.certificatePath = certificatePath;
             this.idpEntityId = idpEntityId;
+            this.redirectUrl = redirectUrl;
+            this.rememberMeMaxAge = rememberMeMaxAge;
+            this.secureCookie = secureCookie;
+            this.authenticationRequestRepository = authenticationRequestRepository;
+            this.userRepository = userRepository;
+            this.magicLinkUrl = magicLinkUrl;
+            this.mailBox = mailBox;
+            this.serviceProviderResolver = serviceProviderResolver;
+
+            ACR.initialize(linkedInstitution, validateNames, affiliationStudent);
 
             List<String> spEntityIdentifiers = commaSeparatedToList(spEntityId);
             List<String> spMetaDataUrls = commaSeparatedToList(spMetaDataUrl);
@@ -87,29 +117,28 @@ public class SecurityConfiguration {
 
         @Override
         protected void configure(HttpSecurity http) throws Exception {
-            super.configure(http);
+            http
+                    .requestMatchers()
+                    .antMatchers("/saml/guest-idp/**")
+                    .and()
+                    .sessionManagement()
+                    .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
+                    .and()
+                    .addFilterBefore(
+                            new GuestIdpAuthenticationRequestFilter(
+                                    redirectUrl,
+                                    serviceProviderResolver,
+                                    authenticationRequestRepository,
+                                    userRepository,
+                                    rememberMeMaxAge,
+                                    secureCookie,
+                                    magicLinkUrl,
+                                    mailBox),
+                            AbstractPreAuthenticatedProcessingFilter.class
+                    )
+                    .authorizeRequests()
+                    .antMatchers("/**").hasRole("GUEST");
 
-            String prefix = getPrefix();
-            SamlIdentityProviderSecurityDsl configurer = new GuestIdentityProviderDsl(beanConfig);
-
-            SamlIdentityProviderSecurityDsl samlIdentityProviderSecurityDsl = http.apply(configurer)
-                    .prefix(prefix)
-                    .useStandardFilters(false)
-                    .entityId(idpEntityId)
-                    .alias("guest-idp")
-                    .singleLogout(false)
-                    .signMetadata(true)
-                    .signatureAlgorithms(RSA_SHA512, SHA512)
-                    .nameIds(asList(NameId.PERSISTENT))
-                    .rotatingKeys(getKeys());
-            serviceProviders.forEach(sp -> samlIdentityProviderSecurityDsl.serviceProvider(
-                    new ExternalServiceProviderConfiguration()
-                            .setAlias(sp.getEntityId())
-                            .setMetadata(sp.getMetaDataUrl())
-                            .setSkipSslValidation(false)
-
-            ));
-        }
 
         private RotatingKeys getKeys() throws Exception {
             String privateKey;
