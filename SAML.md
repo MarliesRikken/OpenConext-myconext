@@ -16,3 +16,12 @@ https://mvnrepository.com/artifact/org.opensaml/opensaml-saml-impl
 # Reuse - inspiration
 https://github.com/spring-projects/spring-security-saml/tree/develop
 
+# Notes
+Use from spring-security-saml/tree/develop
+SamlFilter#processHtml
+DefaultSamlTransformer
+OpenSamlImplementation
+
+use from spring-security
+copy OpenSamlMetadataResolver
+
